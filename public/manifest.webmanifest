@@ -1,0 +1,16 @@
+{
+  "name": "Bus 8 y 25 Málaga",
+  "short_name": "Bus 8 y 25",
+  "description": "Paradas cercanas y llegadas en tiempo real de las líneas 8 y 25 de la EMT de Málaga",
+  "lang": "es",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#d9480f",
+  "theme_color": "#d9480f",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

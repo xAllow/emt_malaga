@@ -1,0 +1,8 @@
+{
+  "name": "emt-malaga",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Líneas 8 y 25 de la EMT de Málaga: paradas cercanas, mapa y llegadas en tiempo real",
+  "scripts": { "dev": "node dev.js" },
+  "engines": { "node": ">=20" }
+}
