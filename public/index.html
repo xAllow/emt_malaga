@@ -63,7 +63,7 @@ const COLOR = { '8': '#d9480f', '25': '#1971c2' };
 const WALK_MS = 1.33, WALK_DETOUR = 1.25;   // 4,8 km/h y rodeo medio por calles
 const BUS_MS = 4.4, DWELL_S = 20;           // ~16 km/h de media + 20 s por parada (estimación)
 
-let data = {}, buses = [], est = null, origin = { ...DEFAULT };
+let data = {}, metro = null, buses = [], est = null, origin = { ...DEFAULT };
 let choice = {};  // 'linea-sentido' -> cod de la parada destino X
 const map = L.map('map').setView([DEFAULT.lat, DEFAULT.lon], 15);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
@@ -124,6 +124,8 @@ function renderChips() {
   add('all', 'Todas');
   for (const [l, info] of Object.entries(data))
     for (const s of Object.keys(info.sentidos)) add(l + '-' + s, `${l} ${DIR[s]} → ${cab(l, s, info)}`);
+  for (const [r, ln] of Object.entries(metro?.lineas || {}))
+    for (const [s, sd] of Object.entries(ln.sentidos)) add(`M${r}-${s}`, `Metro ${ln.nombre} → ${sd.destino}`);
 }
 
 // paradas que le faltan al bus hasta la mía, empezando por la siguiente a su última parada
@@ -133,6 +135,76 @@ function quedan(o, a) {
   if (!falta.length) return '<div class="mut">Está en tu parada</div>';
   return `<div class="mut">Última parada: ${o.stops[a.idx].nombre}</div><div><b>${falta.length}</b> paradas hasta la tuya:</div><ol class="falta">` +
     falta.map((p, i) => `<li${i === falta.length - 1 ? ' class="tuya"' : ''}>${p.nombre}</li>`).join('') + '</ol>';
+}
+
+
+// ---------- Metro: solo horario programado (Metro Málaga no publica tiempos en tiempo real) ----------
+const ymd = d => d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate() + '';
+const hm = ms => new Date(ms).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+
+// salidas de la estación idx a partir de ms (incluye los trenes después de medianoche del servicio de ayer)
+function salidasMetro(sd, idx, desdeMs, n) {
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  const ayer = new Date(hoy); ayer.setDate(ayer.getDate() - 1);
+  const out = [];
+  for (const [dia, fecha] of [[ayer, ymd(ayer)], [hoy, ymd(hoy)]]) {
+    const svc = metro.servicios[fecha];
+    if (!svc) continue;
+    const base = new Date(dia); base.setHours(0, 0, 0, 0);
+    for (const v of sd.viajes) {
+      if (v.s !== svc || v.t[idx] == null) continue;
+      const ms = base.getTime() + v.t[idx] * 1000;
+      if (ms >= desdeMs) out.push({ ms, v });
+    }
+  }
+  return out.sort((a, b) => a.ms - b.ms).slice(0, n);
+}
+
+function renderMetro(cards) {
+  if (!metro) return;
+  const filas = [];
+  for (const [r, ln] of Object.entries(metro.lineas))
+    for (const [s, sd] of Object.entries(ln.sentidos)) {
+      let best = 0, bd = Infinity;
+      sd.estaciones.forEach((e, i) => { const d = dist(origin, e); if (d < bd) { bd = d; best = i; } });
+      filas.push({ r, s, ln, sd, best, bd });
+    }
+  for (const o of filas.sort((a, b) => a.bd - b.bd)) {
+    const key = `M${o.r}-${o.s}`, est0 = o.sd.estaciones[o.best], color = o.ln.color, walk = o.bd * WALK_DETOUR / WALK_MS;
+    if (sel !== 'all' && sel !== key) continue;
+    L.polyline(o.ln.forma, { color, weight: 4, opacity: .5, dashArray: '2 8' }).addTo(layer);
+    o.sd.estaciones.forEach((e, i) => L.circleMarker([e.lat, e.lon], { radius: i === o.best ? 8 : 4, color, weight: i === o.best ? 3 : 1,
+      fillColor: i === o.best ? '#fff' : color, fillOpacity: 1 }).bindTooltip(e.nombre).addTo(layer));
+    L.polyline([[origin.lat, origin.lon], [est0.lat, est0.lon]], { color: '#555', dashArray: '4 6', weight: 2 }).addTo(layer);
+
+    const ahora = Date.now(), salidas = salidasMetro(o.sd, o.best, ahora + walk * 1000, 3);
+    const xi = o.sd.estaciones.findIndex((e, i) => i > o.best && e.id === choice[key]);
+    const opts = '<option value="">¿A qué estación vas? (X)</option>' + o.sd.estaciones.slice(o.best + 1)
+      .map(e => `<option value="${e.id}" ${choice[key] === e.id ? 'selected' : ''}>${e.nombre}</option>`).join('');
+    let aviso = '';
+    if (!salidas.length) {
+      const f = metro.hasta, fin = `${f.slice(6)}/${f.slice(4, 6)}/${f.slice(0, 4)}`;
+      aviso = ymd(new Date()) > f ? `Horario no disponible: el calendario de Metro llega hasta el ${fin}.`
+        : 'No quedan más trenes a los que llegues hoy.';
+    }
+    const lista = salidas.map(x => {
+      const llegada = xi >= 0 && x.v.t[xi] != null ? ` · llega a ${o.sd.estaciones[xi].nombre} a las <b>${hm(x.ms + (x.v.t[xi] - x.v.t[o.best]) * 1000)}</b>` : '';
+      return `<div>Sale a las <b>${hm(x.ms)}</b> <span class="mut">(en ${mins((x.ms - ahora) / 1000)})</span>${llegada}</div>`;
+    }).join('') || `<div class="mut">${aviso}</div>`;
+    if (xi >= 0) L.marker([o.sd.estaciones[xi].lat, o.sd.estaciones[xi].lon]).bindPopup('Destino: ' + o.sd.estaciones[xi].nombre).addTo(layer);
+
+    const div = document.createElement('div');
+    div.className = 'card';
+    div.style.borderLeft = `6px solid ${color}`;
+    div.innerHTML = `<div class="row"><span class="badge" style="background:${color};color:#fff">M ${o.ln.nombre}</span> <span class="dir" style="color:${color}">METRO</span> <b>→ ${o.sd.destino}</b></div>
+      <div style="margin-top:6px">Estación: <b>${est0.nombre}</b></div>
+      <div class="mut">A ${Math.round(o.bd)} m · ~${Math.max(1, Math.round(walk / 60))} min andando</div>
+      <div style="margin-top:6px">${lista}</div>
+      <div class="mut">Horario programado, no es tiempo real. Solo trenes a los que te da tiempo andando.</div>
+      <select data-key="${key}">${opts}</select>`;
+    div.querySelector('select').onchange = e => { choice[key] = e.target.value; render(); };
+    cards.appendChild(div);
+  }
 }
 
 function render() {
@@ -186,6 +258,7 @@ function render() {
     div.querySelector('select').onchange = e => { choice[key] = e.target.value; render(); refresh(); };
     cards.appendChild(div);
   }
+  renderMetro(cards);
   // buses en vivo
   for (const b of buses) {
     if (sel !== 'all' && sel !== b.linea + '-' + b.sentido) continue;
@@ -204,7 +277,7 @@ async function refresh() {
     if (buses.error) throw new Error(buses.error);
     // paradas de subida + destinos elegidos -> estimaciones oficiales de EMT
     const codes = new Set(plan().map(o => o.stops[o.best].cod));
-    Object.values(choice).forEach(c => c && codes.add(+c));
+    Object.entries(choice).forEach(([k, c]) => c && !k.startsWith('M') && codes.add(+c));
     try {
       const r = await (await fetch('/api/estim?cod=' + [...codes].join(','))).json();
       est = r.error ? null : r;
@@ -232,6 +305,7 @@ map.on('click', e => setOrigin({ lat: e.latlng.lat, lon: e.latlng.lng, name: 'Pu
 
 (async () => {
   data = await (await fetch('/api/lineas')).json();
+  try { metro = await (await fetch('/metro.json')).json(); } catch { metro = null; }
   await refresh();
   map.setView([origin.lat, origin.lon], 16);
   setInterval(refresh, 15000);
